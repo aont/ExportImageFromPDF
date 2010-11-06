@@ -40,6 +40,7 @@ using PdfSharp.Pdf.Filters;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
+using System.Text;
 
 namespace ExportImages
 {
@@ -102,32 +103,119 @@ namespace ExportImages
         {
             var colorspace_var = image.Elements[PdfImage.Keys.ColorSpace];
 
+            int bits = image.Elements.GetInteger(PdfImage.Keys.BitsPerComponent);
+            PixelFormat pixelformat = GetIndexedPixelFormat(bits);
+
+            int width = image.Elements.GetInteger(PdfImage.Keys.Width);
+            int height = image.Elements.GetInteger(PdfImage.Keys.Height);
+
+
+            var colorspace_pdfarray = colorspace_var as PdfArray;
+
             string colorspace = null;
-            var type = colorspace_var.GetType();
-            if (type == typeof(PdfArray))
             {
-                colorspace = (colorspace_var as PdfArray).Elements[0].ToString();
-            }
-            else if (type == typeof(PdfName))
-            {
-                colorspace = (colorspace_var as PdfName).Value;
-            }
-            else
-            {
-                throw new NotSupportedException();
-                return;
-            }
-            switch (colorspace)
-            {
-                case "/DeviceGray":
-                    ExportIndexedImage(image, ref count);
-                    break;
-                case "/Indexed":
-                    ExportIndexedImage(image, ref count);
-                    break;
-                default:
+                if (colorspace_pdfarray != null)
+                {
+                    colorspace = colorspace_pdfarray.Elements[0].ToString();
+
+                }
+                else if (colorspace_var.GetType() == typeof(PdfName))
+                {
+                    colorspace = (colorspace_var as PdfName).Value;
+                }
+                else
+                {
                     throw new NotSupportedException();
-                    break;
+                }
+                switch (colorspace)
+                {
+                    case "/DeviceGray":
+                    case "/Indexed":
+                        break;
+                    default:
+                        bits = 24;
+                        pixelformat = PixelFormat.Format24bppRgb;
+                        break;
+                }
+            }
+
+            using (var bmp = new Bitmap(width, height, pixelformat))
+            {
+
+                if (colorspace == "/Indexed")
+                {
+                    var palette = bmp.Palette;
+                    var elements = colorspace_pdfarray.Elements;
+                    for (int i = 1; i < elements.Count; ++i)
+                    {
+                        var elem = elements[i];
+                        var type = elem.GetType();
+
+                        int length = (1 << bits) - 1;
+                        if (type == typeof(PdfInteger))
+                        {
+                            if ((elem as PdfInteger).Value != length)
+                                throw new NotSupportedException();
+                        }
+                        else if (type == typeof(PdfString))
+                        {
+                            var data_enc = (elem as PdfString).Value.ToCharArray();
+
+                            for (int p = 0; p <= length; ++p)
+                            {
+                                var colorp = palette.Entries[p];
+                                palette.Entries[p] = Color.FromArgb(data_enc[3 * p], data_enc[3 * p + 1], data_enc[3 * p + 2]);
+                            }
+
+                        }
+                    }
+                    bmp.Palette = palette;
+                }
+
+
+                var bmd = bmp.LockBits(new Rectangle(Point.Empty, bmp.Size), ImageLockMode.WriteOnly, pixelformat);
+                var data = image.Stream.UnfilteredValue;
+
+
+
+                switch (colorspace)
+                {
+                    case "/DeviceGray":
+                    case "/Indexed":
+                        {
+                            int bmd_h = bmd.Scan0.ToInt32();
+                            int byte_h = 0;
+                            int Stride_data = (width * bits + 7) / 8;
+
+                            for (int h = 0; h < height; ++h)
+                            {
+                                Marshal.Copy(data, Stride_data * h, (IntPtr)bmd_h, Stride_data);
+                                bmd_h += bmd.Stride;
+                                byte_h += Stride_data;
+                            }
+
+                        }
+                        break;
+                    default:
+                        {
+                            int Stride_data = (width * bits + 7) / 8;
+                            for (int h = 0; h < height; ++h)
+                            {
+                                for (int w = 0; w < width; ++w)
+                                {
+                                    Marshal.WriteByte(bmd.Scan0, h * bmd.Stride + 3 * w+2, data[h * Stride_data + 3 * w]);
+                                    Marshal.WriteByte(bmd.Scan0, h * bmd.Stride + 3 * w + 1, data[h * Stride_data + 3 * w + 1]);
+                                    Marshal.WriteByte(bmd.Scan0, h * bmd.Stride + 3 * w , data[h * Stride_data + 3 * w + 2]);
+                                }
+                            }
+                        }
+                        break;
+                }
+
+
+                bmp.UnlockBits(bmd);
+
+                bmp.Save(String.Format("Image{0}.png", count++), ImageFormat.Png);
             }
         }
 
@@ -144,41 +232,6 @@ namespace ExportImages
                     return PixelFormat.Format8bppIndexed;
                 default:
                     throw new NotSupportedException();
-            }
-        }
-        static void ExportIndexedImage(PdfDictionary image, ref int count)
-        {
-
-            int bits = image.Elements.GetInteger(PdfImage.Keys.BitsPerComponent);
-            PixelFormat pixelformat = GetIndexedPixelFormat(bits);
-
-            int width = image.Elements.GetInteger(PdfImage.Keys.Width);
-            int height = image.Elements.GetInteger(PdfImage.Keys.Height);
-
-            using (var bmp = new Bitmap(width, height, pixelformat))
-            {
-                var bmd = bmp.LockBits(new Rectangle(Point.Empty, bmp.Size), ImageLockMode.WriteOnly, pixelformat);
-
-                {
-                    var data = Filtering.FlateDecode.Decode(image.Stream.Value);
-
-                    int bmd_h = bmd.Scan0.ToInt32();
-                    int byte_h = 0;
-                    int Stride_data = (width * bits + 7) / 8;
-
-                    for (int h = 0; h < height; ++h)
-                    {
-                        Marshal.Copy(data, Stride_data * h, (IntPtr)bmd_h, Stride_data);
-                        bmd_h += bmd.Stride;
-                        byte_h += Stride_data;
-                    }
-
-                }
-
-
-                bmp.UnlockBits(bmd);
-
-                bmp.Save(String.Format("Image{0}.png", count++), ImageFormat.Png);
             }
         }
 
