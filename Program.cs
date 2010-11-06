@@ -49,24 +49,19 @@ namespace ExportImages
         static void Main()
         {
             const string filename = @"Sample.pdf";
-
             PdfDocument document = PdfReader.Open(filename);
 
             int imageCount = 0;
-
             var objects = document.Internals.GetAllObjects();
-
             foreach (var item in objects)
             {
                 PdfDictionary xObject = item as PdfDictionary;
-                // Is external object an image?
                 if (xObject != null && xObject.Elements.GetString(PdfImage.Keys.Subtype) == "/Image")
                 {
                     ExportImage(xObject, ref imageCount);
                 }
 
             }
-
             Console.WriteLine("{0} Images", imageCount);
         }
 
@@ -76,21 +71,22 @@ namespace ExportImages
             switch (filter)
             {
                 case "/DCTDecode":
-                    ExportDCTEncodedImage(image, ref count);
+                    ExportJpegImage(image, ref count);
                     break;
 
+                case "":
                 case "/FlateDecode":
-                    ExportFlateEncodedImage(image, ref count);
+                    ExportUnfilterableImage(image, ref count);
                     break;
 
                 case "/CCITTFaxDecode":
+                case "/RunLengthDecode,":
                 default:
-                    break;
                     throw new NotSupportedException();
             }
         }
 
-        static void ExportDCTEncodedImage(PdfDictionary image, ref int count)
+        static void ExportJpegImage(PdfDictionary image, ref int count)
         {
             byte[] stream = image.Stream.Value;
             using (FileStream fs = new FileStream(String.Format("Image{0}.jpg", count++), FileMode.Create, FileAccess.Write))
@@ -99,7 +95,7 @@ namespace ExportImages
             }
         }
 
-        static void ExportFlateEncodedImage(PdfDictionary image, ref int count)
+        static void ExportUnfilterableImage(PdfDictionary image, ref int count)
         {
             var colorspace_var = image.Elements[PdfImage.Keys.ColorSpace];
 
@@ -203,9 +199,9 @@ namespace ExportImages
                             {
                                 for (int w = 0; w < width; ++w)
                                 {
-                                    Marshal.WriteByte(bmd.Scan0, h * bmd.Stride + 3 * w+2, data[h * Stride_data + 3 * w]);
+                                    Marshal.WriteByte(bmd.Scan0, h * bmd.Stride + 3 * w + 2, data[h * Stride_data + 3 * w]);
                                     Marshal.WriteByte(bmd.Scan0, h * bmd.Stride + 3 * w + 1, data[h * Stride_data + 3 * w + 1]);
-                                    Marshal.WriteByte(bmd.Scan0, h * bmd.Stride + 3 * w , data[h * Stride_data + 3 * w + 2]);
+                                    Marshal.WriteByte(bmd.Scan0, h * bmd.Stride + 3 * w, data[h * Stride_data + 3 * w + 2]);
                                 }
                             }
                         }
